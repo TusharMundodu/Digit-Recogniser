@@ -1,0 +1,342 @@
+---
+title: "Digit Recogniser"
+author: "Tushar Mundodu"
+date: "November 10, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(warning = FALSE, message = F,echo = TRUE)
+```
+
+
+
+```{r cars}
+library(caret)
+library(e1071)
+library(klaR)
+library(pROC)
+library(class)
+
+memory.limit(size=15000)
+```
+
+
+##Importing training and testing data from Kaggle (sample data)
+Link: https://www.kaggle.com/c/digit-recognizer/data
+```{r}
+train_dig<- read.csv("C:/Users/Tushar/Desktop/Courses/3rd SEM/IST 707/Ass3/train.csv",header = T, stringsAsFactors = FALSE)
+test_dig<- read.csv("C:/Users/Tushar/Desktop/Courses/3rd SEM/IST 707/Ass3/test.csv",header = T, stringsAsFactors = FALSE)
+```
+
+
+Checking for data incompleteness,
+```{r}
+sum(!complete.cases(train_dig))
+sum(!complete.cases(test_dig))
+```
+
+
+#Data Pre-Processing
+Training Data:
+```{r}
+table(sapply(train_dig[1,],class))
+train_1<-train_dig
+train_1[,1]<- as.factor(train_dig[,1])
+colnames(train_1)<-c("Y",paste0("X. ",1:784))
+table(sapply(train_1[1,],class))
+df_train<- data.frame(train_1)
+```
+
+Testing Data:
+```{r}
+table(sapply(test_dig[1,],class))
+test_1<-test_dig
+colnames(test_1)<-c(paste0("X. ",1:783))
+table(sapply(test_1[1,],class))
+df_test<- data.frame(test_1)
+```
+
+Dimensions of training and testing set (before pre-processing),
+```{r}
+dim(df_train)
+dim(df_test)
+```
+
+
+Checking the training data with 42k observations if resampling is needed due to large number of 0's and possibility of zero variances.
+```{r}
+label.freq <- table(df_train$Y)
+
+```
+
+```{r pressure, echo=FALSE}
+barplot(label.freq)
+```
+
+All digits (0-9) are almost equally distributed, hence resampling is not required.
+
+Determining the spread of digits (0-9);
+```{r}
+percentage <- round((table(df_train$Y)/sum(table(df_train$Y)) * 100),2)
+labels <- paste0(row.names(table(df_train$Y)), " (", percentage, "%) ") 
+pie(table(df_train$Y), labels = labels, main = "Distribution of Digits(0-9)",col = rainbow(10))
+```
+
+
+Creating a 28*28 matrix with pixel colours for row 10 : imageID '3' is used as an example;
+```{r}
+df_train[10,1]
+m = matrix(unlist(df_train[10,-1]),nrow = 28,byrow = T)
+m <- apply(m,1,rev)
+m <- apply(m,1,rev)
+m <- apply(m,1,rev)
+image(m,col=grey.colors(255),axes=F)
+```
+
+
+Creating a pixel object of an image on train and test data;
+```{r}
+df_train.pixel <- df_train[,2:ncol(df_train)]
+df_test.pixel <- df_test[,2:ncol(df_test)]
+```
+
+
+
+Removing zero variances from training & testing data;
+```{r}
+nzv.Default <- nearZeroVar(df_train.pixel)
+dim(df_train.pixel)
+df_train.pixel.postnzv <- df_train.pixel[,-nzv.Default]
+dim(df_train.pixel.postnzv)
+
+dim(df_test.pixel)
+df_test.pixel.postnzv <- df_test.pixel[,-nzv.Default]
+dim(df_test.pixel.postnzv)
+```
+
+
+Multivariate Analysis often starts out with data involving a substantial number of correlated variables. *Principal Component Analysis (PCA)* is a dimension-reduction tool that can be used to reduce a large set of variables to a small set that still contains most of the information in the large set.
+
+Pre-processing zeroes vector with 'caret' library;
+```{r}
+preProcValues <- preProcess(df_train.pixel.postnzv, method=c("pca"))
+x_trainTransformed <- predict(preProcValues, df_train.pixel.postnzv)
+dim(x_trainTransformed)
+
+preProcValuesTest <- preProcess(df_test.pixel.postnzv, method=c("pca"))
+x_testTransformed <- predict(preProcValuesTest, df_test.pixel.postnzv)
+dim(x_testTransformed)
+```
+Pre-processing using PCA is used to standardise and transform the data to reduce redundancy and dimension size for better and faster modelling. This is used for all 3 models that will be run : NB, SVM, kNN
+
+
+
+
+
+#Modelling
+##Naive Bayes (NB)
+This is a supervised learning method for classification on categorical variables/features. It is based on Bayes Theorem by calculating posterior probability for each class and the class with highest posterior probability is outcome of prediction.
+P(Y|X)=P(X|Y)???P(Y)P(X) {independent assumption}
+```{r}
+dftrnb <- cbind.data.frame(df_train$Y, x_trainTransformed)
+names(dftrnb)[1] <- "label"
+dftrnb$label <- as.factor(dftrnb$label)
+```
+
+
+Splitting training set in 80:20 ratio for running NB (42k observations);
+```{r}
+samplerows_nb <- sample(1:nrow(df_train.pixel), nrow(df_train)*0.8, replace=FALSE)
+dftrnbsample <- dftrnb[samplerows_nb,]
+dftrnbval <- dftrnb[-samplerows_nb,]
+```
+
+
+Running default NB model and determining elapsed time;
+```{r}
+set.seed(3563)
+start_time_nb <- Sys.time()
+digit_nb <- naiveBayes(label ~ ., data=dftrnbsample, usekernel = T)
+y_predict_valnb <- predict(digit_nb, dftrnbval, type='class')
+end_time_nb <- Sys.time()
+diff_nb<- end_time_nb-start_time_nb
+diff_nb
+```
+
+
+Tuning NB for better accuracy (accuracy of default model = ~86%);
+```{r}
+set.seed(4623)
+start_time_tuned_nb <- Sys.time()
+digit_tuned_nb <- suppressWarnings(train(label ~ ., data = dftrnbsample,
+                            method = "nb", tuneLength = 5, 
+                            trcontrol = trainControl(method = "boot", number = 50),
+                            tuneGrid = data.frame(fL = 1, usekernel = F, adjust = 1)))
+
+
+predict_tuned_nb <- suppressWarnings(predict(digit_tuned_nb, newdata = dftrnbval, type = "raw"))
+end_time_tuned_nb <- Sys.time()
+diff_tuned_nb<- end_time_tuned_nb-start_time_tuned_nb
+diff_tuned_nb
+```
+
+
+
+##Support Vector Machine (SVM)
+SVM works with both linear and non-linear data(logit/sigmoid function) by maximising the margins between the categories. It is used mainly for outliers, wherein the distance between data points and decision boundary indicates confidence of prediction. Kernels are used to project linearly unseparable data points into higher dimensional space so that a hyperplane could be found to separate different classes.
+```{r}
+dftrsvm <- cbind.data.frame(df_train$Y, x_trainTransformed)
+names(dftrsvm)[1] <- "label"
+dftrsvm$label <- as.factor(dftrsvm$label)
+```
+
+
+Splitting training set in 80:20 ratio for running SVM (42k observations);
+```{r}
+samplerows_svm <- sample(1:nrow(df_train.pixel), nrow(df_train)*0.8, replace=FALSE)
+dftrsvmsample <- dftrsvm[samplerows_svm,]
+dftrsvmval <- dftrsvm[-samplerows_svm,]
+```
+
+
+Running default model and determining elapsed time;
+```{r}
+set.seed(3456)
+start_time <- Sys.time()
+digit_svm <- svm(label ~ ., data=dftrsvmsample)
+y_predict_valsvm <- predict(digit_svm, dftrsvmval)
+end_time <- Sys.time()
+diff_svm<- end_time-start_time
+diff_svm
+```
+
+*Code inspired from Kaggle: kernel of user 'otiksaw'*
+
+
+
+##k-Nearest Neighbours (kNN)
+This is lazy learning model that takes a long prediction time and is too slow for an online system. Highly sensitive to outliers and noisy data. This is an instance based learning where data points nearest to each other tend to behave similarly. *Overfitting* is very likely in these models due to high variance or low bias (if 'k' is too small).
+```{r}
+dftrknn <- cbind.data.frame(df_train$Y, x_trainTransformed)
+names(dftrknn)[1] <- "label"
+dftrknn$label <- as.factor(dftrknn$label)
+```
+
+Splitting training set in 80:20 ratio for running knn (42k observations);
+```{r}
+samplerows_knn <- sample(1:nrow(df_train.pixel), nrow(df_train)*0.8, replace=FALSE)
+dftrknnsample <- dftrknn[samplerows_knn,]
+dftrknnval <- dftrknn[-samplerows_knn,]
+```
+
+Running tuned model with cross-validation(5 fold, 2 repetitions) evaluation method, starting with k=3 (3,4,5); and determining elapsed time
+```{r}
+set.seed(6163)
+start_time_knn <- Sys.time()
+digit_knn <- train(label ~ ., data = dftrknnsample, method = "knn", tuneGrid = data.frame(k = seq(3, 15)),trControl = trainControl(method = "repeatedcv", number = 5,repeats = 2))
+y_predict_valknn <- predict(digit_knn, dftrknnval, type='raw')
+end_time_knn <- Sys.time()
+diff_knn<- end_time_knn-start_time_knn
+diff_knn
+```
+
+Determining best 'k' value for kNN;
+```{r}
+plot(digit_knn)
+print(digit_knn)
+```
+*k=3* has the best accuracy and kappa values.
+
+
+
+
+
+#Performance of models used : NB, SVM, kNN
+
+Determining performance characteristics for NB and tuned NB model after bootstrapping;
+```{r}
+confusionMatrix(y_predict_valnb,dftrnbval$label)
+confusionMatrix(predict_tuned_nb,dftrnbval$label)
+```
+Accuracy of NB = ~87%
+Bootstrapped NB model accuracy = ~87%
+ 
+
+
+Determining performance characteristics for SVM & tuned kNN model;
+```{r}
+confusionMatrix(y_predict_valsvm,dftrsvmval$label)
+confusionMatrix(y_predict_valknn,dftrknnval$label)
+```
+Accuracy of SVM(default) = ~97.5%
+
+Accuracy of kNN(tuned) = ~96.5%
+
+
+
+#Validation on transformed testing data
+Validating the best model against transformed test data (after PCA) : SVM with ~97.23%
+```{r}
+y_test_svm <- predict(digit_svm, x_testTransformed)
+y_test_svm <- as.data.frame(y_test_svm)
+no_id <- 1:nrow(y_test_svm)
+svm_digit_test <- cbind.data.frame(no_id, y_test_svm)
+names(svm_digit_test)[1] <- "ImageId"
+names(svm_digit_test)[2] <- "label"
+View(svm_digit_test)
+write.csv(svm_digit_test, "digit_svm.csv", row.names = FALSE, quote = FALSE)
+```
+
+
+
+#Performance Comparison
+
+###AUC-ROC
+```{r}
+print(paste("AUC-ROC of tuned NB model= ",
+            auc(multiclass.roc(as.numeric(dftrnbval$label), as.numeric(predict_tuned_nb)))))
+print(paste("AUC-ROC of SVM model= ",
+            auc(multiclass.roc(as.numeric(dftrsvmval$label), as.numeric(y_predict_valsvm)))))
+print(paste("AUC-ROC of kNN model= ",
+            auc(multiclass.roc(as.numeric(dftrknnval$label), as.numeric(y_predict_valknn)))))
+
+
+```
+
+
+*AUC-ROC of SVM model has the highest value of ~0.981* compared to kNN (~0.978) & bootstrapped NB model (~0.914). 
+
+
+###Processing time of models
+```{r}
+print(paste0("Time taken to run models for NB, tuned_NB, SVM and kNN respectively: ",round(diff_nb,2),",",round(diff_tuned_nb,2),",",round(diff_svm,2),",",round(diff_knn,2)))
+```
+Though NB is the fastest model with ~15 seconds (~7.5 minutes for tuned model), it is the least accurate of the 3 models. kNN being a lazy learner takes the longest time with ~65 minutes . 
+
+*SVM is the better performing model of the 3, with a processing time of ~6.5 minutes (default model) which is the least and has the best accuracy with more than 97%, and hence tuning is not required to compare with NB and kNN* SVM is sensitive to outliers, and though both SVM and kNN produce the same accuracy, more or less, in this case, SVM is slightly better as it processes faster and uses only the most relevant points to find support vectors,especially with few points in a high dimensional space.
+
+
+
+#Kaggle
+
+Kaggle submission **(Leaderboard score of 0.059)**: https://www.kaggle.com/c/digit-recognizer/leaderboard
+
+
+
+#References:
+
+1. https://www.kaggle.com/otiksaw/minst-using-randomforest-svm-and-neuralnet/code
+2. http://what-when-how.com/artificial-intelligence/improving-the-naive-bayes-classifier-artificial-intelligence/
+3. https://www.youtube.com/watch?v=MbBvtnpcx2c
+4. https://rpubs.com/JanpuHou/304506
+5. http://bioinfo.umassmed.edu/bootstrappers/bootstrappers-courses/pastCourses/rCourse_2016-04/Additional_Resources/Rcolorstyle.html
+6. https://www.r-bloggers.com/5-ways-to-measure-running-time-of-r-code/
+7. https://stats.stackexchange.com/questions/35694/naive-bayes-fails-with-a-perfect-predictor
+8. http://davpinto.com/fastknn/
+9. https://machinelearningmastery.com/compare-models-and-select-the-best-using-the-caret-r-package/
+
+
+
+
